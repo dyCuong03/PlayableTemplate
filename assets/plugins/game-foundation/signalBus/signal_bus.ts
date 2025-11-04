@@ -1,16 +1,16 @@
 /**
- * signalBus - Simple event bus with type checking
+ * signal_bus - Simple event bus with type checking
  */
-export class SignalBus {
+export class signal_bus {
     private subscriptions = new Map<any, Array<(data: any) => void>>();
-    private static _instance: SignalBus | null = null;
+    private static _instance: signal_bus | null = null;
 
     /**
      * Get singleton instance
      */
-    public static get instance(): SignalBus {
+    public static get instance(): signal_bus {
         if (!this._instance) {
-            this._instance = new SignalBus();
+            this._instance = new signal_bus();
         }
         return this._instance;
     }
@@ -70,7 +70,7 @@ export class SignalBus {
             try {
                 callback(data);
             } catch (error) {
-                console.error(`[SignalBus] Error in callback for ${signalType.name}:`, error);
+                console.error(`[signal_bus] Error in callback for ${signalType.name}:`, error);
             }
         }
     }
