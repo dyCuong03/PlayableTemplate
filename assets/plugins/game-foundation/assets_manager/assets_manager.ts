@@ -22,7 +22,7 @@ export class assets_manager {
         });
     }
 
-    public async load_resource<T extends Asset>(path: string, type: Constructor<T>): Promise<T> {
+    public async loadResource<T extends Asset>(path: string, type: Constructor<T>): Promise<T> {
         const cache_key = `${path}_${type.name}`;
 
         if (this._cache.has(cache_key)) {
@@ -72,27 +72,27 @@ export class assets_manager {
     }
 
     public async loadPrefab(path: string): Promise<Prefab> {
-        return this.load_resource(path, Prefab);
+        return this.loadResource(path, Prefab);
     }
 
     public async loadSprite(path: string): Promise<SpriteFrame> {
-        return this.load_resource(path, SpriteFrame);
+        return this.loadResource(path, SpriteFrame);
     }
 
     public async loadTexture(path: string): Promise<Texture2D> {
-        return this.load_resource(path, Texture2D);
+        return this.loadResource(path, Texture2D);
     }
 
     public async loadAudio(path: string): Promise<AudioClip> {
-        return this.load_resource("audio/"+path, AudioClip);
+        return this.loadResource("audio/"+path, AudioClip);
     }
 
     public async loadJson(path: string): Promise<JsonAsset> {
-        return this.load_resource(path, JsonAsset);
+        return this.loadResource(path, JsonAsset);
     }
 
     public async preloadResources(paths: { path: string; type: Constructor<Asset> }[]): Promise<void> {
-        const promises = paths.map(({ path, type }) => this.load_resource(path, type));
+        const promises = paths.map(({ path, type }) => this.loadResource(path, type));
         await Promise.all(promises);
     }
 
