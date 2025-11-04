@@ -69,7 +69,7 @@ export class object_pool_manager {
         }
 
         if (!prefab) {
-            this.LoadFromResources(key, count).then(r => {});
+            this.LoadFromResources(key, count);
             return;
         }
 
