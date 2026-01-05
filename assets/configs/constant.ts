@@ -5,12 +5,17 @@
     }
 
     static AUDIO_NAME = {
-        BGM: 'BGM',              
-        WIN: 'Win',              
-        LOSE: 'Lose',            
-        INPUT: 'Input',          
-        SHOOT: 'shoot',          
+        BGM: 'BGM',
+        WIN: 'Win',
+        LOSE: 'Lose',
+        INPUT: 'Input',
+        SHOOT: 'shoot',
         DEFAULT: ''
+    }
+
+    static TRACKING = {
+        PROJECT_ID: "game123",
+        PLAYABLE_ID: "level-45"
     }
 
     static EFFECT_NAME = {
