@@ -14,8 +14,9 @@
     }
 
     static TRACKING = {
-        PROJECT_ID: "game123",
-        PLAYABLE_ID: "level-45"
+        PACKAGE_NAME: "game123",
+        PLAYABLE_ID: "level-45",
+        MAX_TRACKING_DURATION_SEC: 60,
     }
 
     static EFFECT_NAME = {
