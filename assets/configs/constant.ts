@@ -16,6 +16,7 @@
     static TRACKING = {
         PLAYABLE_ID: "PA0006",
         PACKAGE_NAME: "com.archer.cat.kitchen",
+        BASE_URL: "https://test.kyvuong.mobi/p.gif",
         MAX_TRACKING_DURATION_SEC: 60,
         ENV: "production"
     }
