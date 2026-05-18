@@ -23,7 +23,3 @@ node_modules/
 #//////////////////////////
 .idea/
 
-#//////////////////////////
-# Third-party editor extensions (cloned per-dev, not vendored)
-#//////////////////////////
-extensions/cocos-mcp-server/
