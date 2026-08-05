@@ -67,7 +67,7 @@ export class tracking_test extends Component {
 
     /**
      * Kịch bản 1 — Happy path
-     * Luồng bình thường: start → interaction × 3 → store_trigger → end
+     * Luồng bình thường: start → interaction × 3 → store_trigger → auto end
      * Kỳ vọng: 5 GET request, interact_count = 4
      */
     scenario1_happyPath() {
@@ -78,8 +78,9 @@ export class tracking_test extends Component {
         this.step("trackInteraction('tap_card')", () => tracking_service.trackInteraction("tap_card"));
         this.step("trackInteraction('swipe_left')", () => tracking_service.trackInteraction("swipe_left"));
         this.step("trackInteraction('tap_hint')", () => tracking_service.trackInteraction("tap_hint"));
-        this.step("trackStoreTrigger('cta_store')", () => tracking_service.trackStoreTrigger("cta_store"));
-        this.step("end()  →  interact_count kỳ vọng = 4", () => tracking_service.end());
+        this.step("trackStoreTrigger('cta_store')  →  tự bắn end, interact_count kỳ vọng = 4",
+            () => tracking_service.trackStoreTrigger("cta_store"));
+        this.step("end() sau store_trigger  →  bị chặn (_endFired=true)", () => tracking_service.end());
     }
 
     /**
@@ -100,8 +101,8 @@ export class tracking_test extends Component {
 
     /**
      * Kịch bản 3 — interact_count chính xác
-     * 2 trackInteraction + 1 trackStoreTrigger + 3 recordRawInteract thủ công
-     * Kỳ vọng interact_count trong end = 6
+     * 2 trackInteraction + 3 recordRawInteract thủ công + 1 trackStoreTrigger
+     * Kỳ vọng trackStoreTrigger tự bắn end với interact_count = 6
      */
     scenario3_interactCount() {
         this.header("Kịch bản 3: interact_count chính xác");
@@ -110,11 +111,11 @@ export class tracking_test extends Component {
         this.step("start()", () => tracking_service.start());
         this.step("trackInteraction('a')  → count=1", () => tracking_service.trackInteraction("a"));
         this.step("trackInteraction('b')  → count=2", () => tracking_service.trackInteraction("b"));
-        this.step("trackStoreTrigger('cta') → count=3", () => tracking_service.trackStoreTrigger("cta"));
+        this.step("recordRawInteract()    → count=3", () => tracking_service.recordRawInteract());
         this.step("recordRawInteract()    → count=4", () => tracking_service.recordRawInteract());
         this.step("recordRawInteract()    → count=5", () => tracking_service.recordRawInteract());
-        this.step("recordRawInteract()    → count=6", () => tracking_service.recordRawInteract());
-        this.step("end()  →  interact_count kỳ vọng = 6", () => tracking_service.end());
+        this.step("trackStoreTrigger('cta') → count=6 và tự bắn end", () => tracking_service.trackStoreTrigger("cta"));
+        this.step("end() sau store_trigger  →  bị chặn (_endFired=true)", () => tracking_service.end());
     }
 
     /**
