@@ -1,0 +1,255 @@
+# Builds PlayableTemplate on the local Windows self-hosted runner and exports
+# the Super HTML playable artifact.
+#
+# Required runner setup:
+#   - Register this machine as a GitHub Actions self-hosted Windows runner.
+#   - Add runner labels: self-hosted, windows, playable-template.
+#   - Install Cocos Creator 3.8.7.
+#   - Set either a GitHub Secret/Variable named COCOS_CREATOR_EXE, or a machine
+#     environment variable with the same name, pointing to CocosCreator.exe.
+#   - If private SSH submodules are not already accessible on the runner, set a
+#     PLAYABLE_SUBMODULE_SSH_KEY secret with read access.
+#
+# Telegram notifications:
+#   - Required secrets: TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID.
+#   - The workflow sends the build status and GitHub run URL.
+#   - When the zip is <= 49 MB, it also sends the zip as a Telegram document.
+
+name: PlayableTemplate Super HTML Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      cocos_build_args:
+        description: "Cocos Creator build args"
+        required: false
+        default: "platform=html5;debug=false"
+  push:
+    branches:
+      - main
+    paths:
+      - "assets/**"
+      - "extensions/super-html/**"
+      - "settings/**"
+      - "package.json"
+      - "tsconfig.json"
+      - ".github/workflows/playable-template-build.yml"
+
+concurrency:
+  group: playable-template-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build Super HTML
+    runs-on: [self-hosted, windows, playable-template]
+    timeout-minutes: 60
+
+    defaults:
+      run:
+        shell: pwsh
+
+    env:
+      PROJECT_DIR: ${{ github.workspace }}
+      SUPER_HTML_DIR: ${{ github.workspace }}\extensions\super-html
+      COCOS_BUILD_ARGS: ${{ inputs.cocos_build_args || 'platform=html5;debug=false' }}
+      COCOS_CREATOR_EXE_CONFIG: ${{ secrets.COCOS_CREATOR_EXE || vars.COCOS_CREATOR_EXE }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          ssh-key: ${{ secrets.PLAYABLE_SUBMODULE_SSH_KEY }}
+
+      - name: Resolve build tools
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $cocosExe = $env:COCOS_CREATOR_EXE_CONFIG
+          if ([string]::IsNullOrWhiteSpace($cocosExe)) {
+            $cocosExe = $env:COCOS_CREATOR_EXE
+          }
+          if ([string]::IsNullOrWhiteSpace($cocosExe)) {
+            $command = Get-Command CocosCreator -ErrorAction SilentlyContinue
+            if ($command) {
+              $cocosExe = $command.Source
+            }
+          }
+          if ([string]::IsNullOrWhiteSpace($cocosExe)) {
+            $knownPaths = @(
+              "C:\ProgramData\cocos\editors\Creator\3.8.7\CocosCreator.exe"
+            )
+            foreach ($path in $knownPaths) {
+              if (Test-Path -LiteralPath $path) {
+                $cocosExe = $path
+                break
+              }
+            }
+          }
+          if ([string]::IsNullOrWhiteSpace($cocosExe) -or -not (Test-Path -LiteralPath $cocosExe)) {
+            throw "Cannot find Cocos Creator. Set COCOS_CREATOR_EXE to the full CocosCreator.exe path."
+          }
+
+          "COCOS_CREATOR_EXE=$cocosExe" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          node --version
+          npm --version
+          & $cocosExe --version
+
+      - name: Clean previous build output
+        run: |
+          $ErrorActionPreference = "Stop"
+          $buildDir = Join-Path $env:PROJECT_DIR "build"
+          if (Test-Path -LiteralPath $buildDir) {
+            Remove-Item -LiteralPath $buildDir -Recurse -Force
+          }
+
+      - name: Install Super HTML extension dependencies
+        working-directory: ${{ env.SUPER_HTML_DIR }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          if (Test-Path -LiteralPath "package-lock.json") {
+            npm ci
+          } else {
+            npm install
+          }
+
+      - name: Verify Super HTML extension
+        working-directory: ${{ env.SUPER_HTML_DIR }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          if (Test-Path -LiteralPath "src") {
+            npx --yes -p typescript@5.4.5 tsc -b
+          } else {
+            $requiredDist = @(
+              "dist\3x\builder.js",
+              "dist\3x\hooks.js",
+              "dist\3x\main.js",
+              "dist\core\build.js"
+            )
+            foreach ($path in $requiredDist) {
+              if (-not (Test-Path -LiteralPath $path)) {
+                throw "Super HTML source is absent and required compiled file is missing: $path"
+              }
+            }
+            Write-Host "Super HTML source folder is absent; using checked-in dist files."
+          }
+
+      - name: Build Cocos HTML5 and Super HTML
+        run: |
+          $ErrorActionPreference = "Stop"
+          & $env:COCOS_CREATOR_EXE --project $env:PROJECT_DIR --build $env:COCOS_BUILD_ARGS
+
+      - name: Locate Super HTML output
+        id: output
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $superHtmlRoot = Join-Path $env:PROJECT_DIR "build\super-html"
+          if (-not (Test-Path -LiteralPath $superHtmlRoot)) {
+            throw "Super HTML output was not found at $superHtmlRoot. Check that the extension onAfterBuild hook ran."
+          }
+
+          $htmlFiles = Get-ChildItem -LiteralPath $superHtmlRoot -Recurse -File -Filter "*.html"
+          if (-not $htmlFiles) {
+            throw "Super HTML output exists, but no .html file was found under $superHtmlRoot."
+          }
+
+          $branch = "${{ github.ref_name }}" -replace "[^A-Za-z0-9._-]", "-"
+          $sha = "${{ github.sha }}".Substring(0, 7)
+          $artifactBase = "playable-template-$branch-$sha"
+          $artifactDir = Join-Path $env:RUNNER_TEMP "playable-template-artifact"
+          $zipPath = Join-Path $env:RUNNER_TEMP "$artifactBase.zip"
+
+          if (Test-Path -LiteralPath $artifactDir) {
+            Remove-Item -LiteralPath $artifactDir -Recurse -Force
+          }
+          New-Item -ItemType Directory -Path $artifactDir | Out-Null
+          Copy-Item -LiteralPath $superHtmlRoot -Destination (Join-Path $artifactDir "super-html") -Recurse
+
+          if (Test-Path -LiteralPath $zipPath) {
+            Remove-Item -LiteralPath $zipPath -Force
+          }
+          Compress-Archive -Path (Join-Path $artifactDir "super-html") -DestinationPath $zipPath -Force
+
+          "artifact_name=$artifactBase" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "zip_path=$zipPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "super_html_root=$superHtmlRoot" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Upload Super HTML artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.output.outputs.artifact_name }}
+          path: ${{ steps.output.outputs.zip_path }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Notify Telegram success
+        if: success()
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ([string]::IsNullOrWhiteSpace($env:TELEGRAM_BOT_TOKEN) -or [string]::IsNullOrWhiteSpace($env:TELEGRAM_CHAT_ID)) {
+            Write-Warning "Telegram secrets are missing; skipping notification."
+            return
+          }
+
+          $runUrl = "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          $artifactName = "${{ steps.output.outputs.artifact_name }}"
+          $message = @"
+          PlayableTemplate build succeeded
+          Branch: ${{ github.ref_name }}
+          Commit: ${{ github.sha }}
+          Actor: ${{ github.actor }}
+          Artifact: $artifactName
+          Run: $runUrl
+          "@
+
+          Invoke-RestMethod `
+            -Uri "https://api.telegram.org/bot$env:TELEGRAM_BOT_TOKEN/sendMessage" `
+            -Method Post `
+            -Body @{
+              chat_id = $env:TELEGRAM_CHAT_ID
+              text = $message
+              disable_web_page_preview = "true"
+            } | Out-Null
+
+          $zipPath = "${{ steps.output.outputs.zip_path }}"
+          $zipFile = Get-Item -LiteralPath $zipPath
+          if ($zipFile.Length -le 49MB) {
+            curl.exe -sS -X POST `
+              "https://api.telegram.org/bot$env:TELEGRAM_BOT_TOKEN/sendDocument" `
+              -F "chat_id=$env:TELEGRAM_CHAT_ID" `
+              -F "caption=PlayableTemplate Super HTML: $artifactName" `
+              -F "document=@$zipPath" | Out-Null
+          } else {
+            Write-Warning "Artifact is larger than Telegram document limit; sent run URL only."
+          }
+
+      - name: Notify Telegram failure
+        if: failure()
+        run: |
+          $ErrorActionPreference = "Continue"
+          if ([string]::IsNullOrWhiteSpace($env:TELEGRAM_BOT_TOKEN) -or [string]::IsNullOrWhiteSpace($env:TELEGRAM_CHAT_ID)) {
+            Write-Warning "Telegram secrets are missing; skipping notification."
+            return
+          }
+
+          $runUrl = "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          $message = @"
+          PlayableTemplate build failed
+          Branch: ${{ github.ref_name }}
+          Commit: ${{ github.sha }}
+          Actor: ${{ github.actor }}
+          Run: $runUrl
+          "@
+
+          Invoke-RestMethod `
+            -Uri "https://api.telegram.org/bot$env:TELEGRAM_BOT_TOKEN/sendMessage" `
+            -Method Post `
+            -Body @{
+              chat_id = $env:TELEGRAM_CHAT_ID
+              text = $message
+              disable_web_page_preview = "true"
+            } | Out-Null
