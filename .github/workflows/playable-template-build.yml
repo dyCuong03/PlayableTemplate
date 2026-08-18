@@ -12,8 +12,14 @@
 #
 # Telegram notifications:
 #   - Required secrets: TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID.
-#   - The workflow sends the build status and GitHub run URL.
-#   - When the zip is <= 49 MB, it also sends the zip as a Telegram document.
+#   - The workflow sends the build status, network size report, and GitHub run URL.
+#   - It sends each Super HTML network file to Telegram only when the file is <= 5 MB.
+#
+# Optional repo variables or workflow_dispatch inputs:
+#   - ANDROID_LINK, IOS_LINK are applied to constant.STORE_LINK before build.
+#   - PACKAGE_NAME, PLATFORM_CAMP, MAX_TRACKING_DURATION_SEC, ENV are applied to
+#     constant.TRACKING before build.
+#   - PLAYABLE_ID stays branch-specific in assets/configs/constant.ts.
 
 name: PlayableTemplate Super HTML Build
 
@@ -22,6 +28,30 @@ on:
     inputs:
       cocos_build_args:
         description: "Optional Cocos Creator build args override. Leave empty to use CI config."
+        required: false
+        default: ""
+      android_link:
+        description: "Optional ANDROID_LINK override. Leave empty to use repo variable ANDROID_LINK."
+        required: false
+        default: ""
+      ios_link:
+        description: "Optional IOS_LINK override. Leave empty to use repo variable IOS_LINK."
+        required: false
+        default: ""
+      package_name:
+        description: "Optional PACKAGE_NAME override. Leave empty to use repo variable PACKAGE_NAME."
+        required: false
+        default: ""
+      platform_camp:
+        description: "Optional PLATFORM_CAMP override. Leave empty to use repo variable PLATFORM_CAMP."
+        required: false
+        default: ""
+      max_tracking_duration_sec:
+        description: "Optional MAX_TRACKING_DURATION_SEC override. Leave empty to use repo variable MAX_TRACKING_DURATION_SEC."
+        required: false
+        default: ""
+      build_env:
+        description: "Optional ENV override. Leave empty to use repo variable ENV."
         required: false
         default: ""
   push:
@@ -52,6 +82,12 @@ jobs:
       SUPER_HTML_DIR: ${{ github.workspace }}\extensions\super-html
       COCOS_BUILD_ARGS: ${{ inputs.cocos_build_args }}
       COCOS_CREATOR_EXE_CONFIG: ${{ secrets.COCOS_CREATOR_EXE || vars.COCOS_CREATOR_EXE }}
+      ANDROID_LINK_CONFIG: ${{ inputs.android_link || vars.ANDROID_LINK }}
+      IOS_LINK_CONFIG: ${{ inputs.ios_link || vars.IOS_LINK }}
+      PACKAGE_NAME_CONFIG: ${{ inputs.package_name || vars.PACKAGE_NAME }}
+      PLATFORM_CAMP_CONFIG: ${{ inputs.platform_camp || vars.PLATFORM_CAMP }}
+      MAX_TRACKING_DURATION_SEC_CONFIG: ${{ inputs.max_tracking_duration_sec || vars.MAX_TRACKING_DURATION_SEC }}
+      ENV_CONFIG: ${{ inputs.build_env || vars.ENV }}
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
 
@@ -103,6 +139,122 @@ jobs:
           if (Test-Path -LiteralPath $buildDir) {
             Remove-Item -LiteralPath $buildDir -Recurse -Force
           }
+
+      - name: Apply build-time constants
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          @'
+          const fs = require("fs");
+
+          const constantPath = "assets/configs/constant.ts";
+          let source = fs.readFileSync(constantPath, "utf8");
+
+          function findObjectEnd(text, openIndex) {
+              let depth = 0;
+              let quote = "";
+              let escaped = false;
+
+              for (let index = openIndex; index < text.length; index++) {
+                  const char = text[index];
+
+                  if (quote) {
+                      if (escaped) {
+                          escaped = false;
+                      } else if (char === "\\") {
+                          escaped = true;
+                      } else if (char === quote) {
+                          quote = "";
+                      }
+                      continue;
+                  }
+
+                  if (char === "\"" || char === "'" || char === "`") {
+                      quote = char;
+                      continue;
+                  }
+
+                  if (char === "{") {
+                      depth++;
+                  } else if (char === "}") {
+                      depth--;
+                      if (depth === 0) {
+                          return index;
+                      }
+                  }
+              }
+
+              throw new Error("Could not find object literal end.");
+          }
+
+          function getStaticObjectRange(text, name) {
+              const pattern = new RegExp(`static\\s+${name}\\s*=\\s*`);
+              const match = pattern.exec(text);
+              if (!match) {
+                  throw new Error(`Could not find static ${name} in ${constantPath}.`);
+              }
+
+              const openIndex = text.indexOf("{", match.index + match[0].length);
+              if (openIndex === -1) {
+                  throw new Error(`Could not find ${name} object literal.`);
+              }
+
+              const closeIndex = findObjectEnd(text, openIndex);
+              return { openIndex, closeIndex };
+          }
+
+          function formatValue(raw, numeric) {
+              if (numeric) {
+                  const value = Number(raw);
+                  if (!Number.isFinite(value)) {
+                      throw new Error(`${numeric} must be a valid number.`);
+                  }
+                  return String(value);
+              }
+
+              return JSON.stringify(raw);
+          }
+
+          function setObjectProperty(text, objectName, propertyName, valueLiteral) {
+              const range = getStaticObjectRange(text, objectName);
+              const before = text.slice(0, range.openIndex + 1);
+              let body = text.slice(range.openIndex + 1, range.closeIndex);
+              const after = text.slice(range.closeIndex);
+              const propertyPattern = new RegExp(`(\\n\\s*${propertyName}\\s*:\\s*)[^,\\n}]+(,?)`);
+
+              if (propertyPattern.test(body)) {
+                  body = body.replace(propertyPattern, `$1${valueLiteral}$2`);
+              } else {
+                  const lineEnding = text.includes("\r\n") ? "\r\n" : "\n";
+                  const indentMatch = body.match(/\n(\s*)[A-Za-z0-9_]+\s*:/);
+                  const indent = indentMatch ? indentMatch[1] : "        ";
+                  const needsComma = body.trim().length && !body.trimEnd().endsWith(",");
+                  body = body.replace(/\s*$/, `${needsComma ? "," : ""}${lineEnding}${indent}${propertyName}: ${valueLiteral},${lineEnding}    `);
+              }
+
+              return before + body + after;
+          }
+
+          const updates = [
+              ["STORE_LINK", "ANDROID_LINK", process.env.ANDROID_LINK_CONFIG],
+              ["STORE_LINK", "IOS_LINK", process.env.IOS_LINK_CONFIG],
+              ["TRACKING", "PACKAGE_NAME", process.env.PACKAGE_NAME_CONFIG],
+              ["TRACKING", "PLATFORM_CAMP", process.env.PLATFORM_CAMP_CONFIG],
+              ["TRACKING", "MAX_TRACKING_DURATION_SEC", process.env.MAX_TRACKING_DURATION_SEC_CONFIG, "MAX_TRACKING_DURATION_SEC"],
+              ["TRACKING", "ENV", process.env.ENV_CONFIG],
+          ].filter(([, , raw]) => raw && raw.trim());
+
+          for (const [objectName, propertyName, raw, numericName] of updates) {
+              source = setObjectProperty(source, objectName, propertyName, formatValue(raw, numericName));
+              console.log(`Applied ${objectName}.${propertyName}`);
+          }
+
+          if (updates.length) {
+              fs.writeFileSync(constantPath, source);
+          } else {
+              console.log("No shared build-time constants were provided.");
+          }
+          '@ | node -
 
       - name: Install Super HTML extension dependencies
         working-directory: ${{ env.SUPER_HTML_DIR }}
@@ -282,6 +434,62 @@ jobs:
           "zip_path=$zipPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           "super_html_root=$superHtmlRoot" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
+      - name: Prepare network Telegram payload
+        id: networks
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $superHtmlRoot = "${{ steps.output.outputs.super_html_root }}"
+          $limitBytes = 5MB
+          $networkFiles = Get-ChildItem -LiteralPath $superHtmlRoot -Recurse -File |
+            Where-Object { $_.Extension -in @(".html", ".zip") } |
+            Sort-Object DirectoryName,Name
+
+          if (-not $networkFiles) {
+            throw "No network .html or .zip files were found under $superHtmlRoot."
+          }
+
+          $items = @()
+          $lines = New-Object System.Collections.Generic.List[string]
+          $lines.Add("Network file size check (limit: 5 MB)") | Out-Null
+
+          foreach ($file in $networkFiles) {
+            $relativePath = [System.IO.Path]::GetRelativePath($superHtmlRoot, $file.FullName)
+            $parts = $relativePath -split "[\\/]"
+            $network = $parts[0]
+            $sizeMb = [Math]::Round($file.Length / 1MB, 2)
+            $pass = $file.Length -le $limitBytes
+            $status = if ($pass) { "[PASS]" } else { "[FAIL]" }
+
+            $items += [pscustomobject]@{
+              network = $network
+              name = $file.Name
+              path = $file.FullName
+              relative_path = $relativePath
+              size_bytes = $file.Length
+              size_mb = $sizeMb
+              pass = $pass
+            }
+
+            $lines.Add("$status $network / $($file.Name) - $sizeMb MB") | Out-Null
+          }
+
+          $passCount = ($items | Where-Object { $_.pass }).Count
+          $failCount = ($items | Where-Object { -not $_.pass }).Count
+          $manifestPath = Join-Path $env:RUNNER_TEMP "super-html-network-files.json"
+          $reportPath = Join-Path $env:RUNNER_TEMP "super-html-network-report.txt"
+
+          $items | ConvertTo-Json -Depth 5 | Out-File -LiteralPath $manifestPath -Encoding utf8
+          $lines | Out-File -LiteralPath $reportPath -Encoding utf8
+
+          "manifest_path=$manifestPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "report_path=$reportPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "pass_count=$passCount" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "fail_count=$failCount" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "total_count=$($items.Count)" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+          Get-Content -LiteralPath $reportPath | Tee-Object -FilePath $env:GITHUB_STEP_SUMMARY -Append
+
       - name: Upload Super HTML artifact
         uses: actions/upload-artifact@v4
         with:
@@ -301,13 +509,17 @@ jobs:
 
           $runUrl = "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           $artifactName = "${{ steps.output.outputs.artifact_name }}"
+          $report = Get-Content -LiteralPath "${{ steps.networks.outputs.report_path }}" -Raw
           $message = @"
           PlayableTemplate build succeeded
           Branch: ${{ github.ref_name }}
           Commit: ${{ github.sha }}
           Actor: ${{ github.actor }}
           Artifact: $artifactName
+          Network files: ${{ steps.networks.outputs.pass_count }}/${{ steps.networks.outputs.total_count }} pass under 5 MB
           Run: $runUrl
+
+          $report
           "@
 
           Invoke-RestMethod `
@@ -319,16 +531,20 @@ jobs:
               disable_web_page_preview = "true"
             } | Out-Null
 
-          $zipPath = "${{ steps.output.outputs.zip_path }}"
-          $zipFile = Get-Item -LiteralPath $zipPath
-          if ($zipFile.Length -le 49MB) {
+          $networkFiles = @(Get-Content -LiteralPath "${{ steps.networks.outputs.manifest_path }}" -Raw | ConvertFrom-Json)
+          foreach ($networkFile in $networkFiles) {
+            if (-not $networkFile.pass) {
+              Write-Warning "Skipping $($networkFile.relative_path) because it is larger than 5 MB."
+              continue
+            }
+
             curl.exe -sS -X POST `
               "https://api.telegram.org/bot$env:TELEGRAM_BOT_TOKEN/sendDocument" `
               -F "chat_id=$env:TELEGRAM_CHAT_ID" `
-              -F "caption=PlayableTemplate Super HTML: $artifactName" `
-              -F "document=@$zipPath" | Out-Null
-          } else {
-            Write-Warning "Artifact is larger than Telegram document limit; sent run URL only."
+              -F "caption=PlayableTemplate $($networkFile.network): $($networkFile.name) ($($networkFile.size_mb) MB)" `
+              -F "document=@$($networkFile.path)" | Out-Null
+
+            Start-Sleep -Milliseconds 800
           }
 
       - name: Notify Telegram failure
