@@ -141,7 +141,44 @@ jobs:
       - name: Build Cocos HTML5 and Super HTML
         run: |
           $ErrorActionPreference = "Stop"
-          & $env:COCOS_CREATOR_EXE --project $env:PROJECT_DIR --build $env:COCOS_BUILD_ARGS
+          $argumentList = @(
+            "--project",
+            $env:PROJECT_DIR,
+            "--build",
+            $env:COCOS_BUILD_ARGS
+          )
+
+          Write-Host "Starting Cocos Creator build..."
+          Write-Host "Project: $env:PROJECT_DIR"
+          Write-Host "Build args: $env:COCOS_BUILD_ARGS"
+
+          $process = Start-Process `
+            -FilePath $env:COCOS_CREATOR_EXE `
+            -ArgumentList $argumentList `
+            -PassThru
+
+          $timeout = [TimeSpan]::FromMinutes(45)
+          if (-not $process.WaitForExit([int]$timeout.TotalMilliseconds)) {
+            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            throw "Cocos Creator build timed out after $($timeout.TotalMinutes) minutes."
+          }
+
+          $exitCode = $process.ExitCode
+          Write-Host "Cocos Creator exited with code $exitCode"
+
+          if ($exitCode -ne 0 -and $exitCode -ne 36) {
+            $logDir = Join-Path $env:PROJECT_DIR "temp\logs"
+            if (Test-Path -LiteralPath $logDir) {
+              Get-ChildItem -LiteralPath $logDir -File |
+                Sort-Object LastWriteTime -Descending |
+                Select-Object -First 3 |
+                ForEach-Object {
+                  Write-Host "----- $($_.FullName) -----"
+                  Get-Content -LiteralPath $_.FullName -Tail 200
+                }
+            }
+            throw "Cocos Creator build failed with exit code $exitCode."
+          }
 
       - name: Locate Super HTML output
         id: output
@@ -150,6 +187,22 @@ jobs:
 
           $superHtmlRoot = Join-Path $env:PROJECT_DIR "build\super-html"
           if (-not (Test-Path -LiteralPath $superHtmlRoot)) {
+            $buildRoot = Join-Path $env:PROJECT_DIR "build"
+            if (Test-Path -LiteralPath $buildRoot) {
+              Write-Host "Existing build outputs:"
+              Get-ChildItem -LiteralPath $buildRoot -Recurse -Depth 3 |
+                Select-Object FullName,Length,LastWriteTime
+            }
+            $logDir = Join-Path $env:PROJECT_DIR "temp\logs"
+            if (Test-Path -LiteralPath $logDir) {
+              Get-ChildItem -LiteralPath $logDir -File |
+                Sort-Object LastWriteTime -Descending |
+                Select-Object -First 3 |
+                ForEach-Object {
+                  Write-Host "----- $($_.FullName) -----"
+                  Get-Content -LiteralPath $_.FullName -Tail 200
+                }
+            }
             throw "Super HTML output was not found at $superHtmlRoot. Check that the extension onAfterBuild hook ran."
           }
 
