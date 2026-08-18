@@ -115,6 +115,7 @@ jobs:
           } else {
             npm install
           }
+          npm update
 
       - name: Verify Super HTML extension
         working-directory: ${{ env.SUPER_HTML_DIR }}
