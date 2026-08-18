@@ -147,6 +147,14 @@ jobs:
             $buildConfig = @{
               platform = "web-mobile"
               debug = $false
+              overwriteProjectSettings = @{
+                includeModules = @{
+                  "gfx-webgl2" = "on"
+                  "physics" = "off"
+                  "physics-2d" = "off"
+                  "spine" = "off"
+                }
+              }
               includedModules = @(
                 "2d",
                 "3d",
