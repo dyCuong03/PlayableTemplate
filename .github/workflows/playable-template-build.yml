@@ -21,9 +21,9 @@ on:
   workflow_dispatch:
     inputs:
       cocos_build_args:
-        description: "Cocos Creator build args"
+        description: "Optional Cocos Creator build args override. Leave empty to use CI config."
         required: false
-        default: "platform=web-mobile;debug=false;nativeCodeBundleMode=asmjs"
+        default: ""
   push:
     branches:
       - main
@@ -52,7 +52,7 @@ jobs:
     env:
       PROJECT_DIR: ${{ github.workspace }}
       SUPER_HTML_DIR: ${{ github.workspace }}\extensions\super-html
-      COCOS_BUILD_ARGS: ${{ inputs.cocos_build_args || 'platform=web-mobile;debug=false;nativeCodeBundleMode=asmjs' }}
+      COCOS_BUILD_ARGS: ${{ inputs.cocos_build_args }}
       COCOS_CREATOR_EXE_CONFIG: ${{ secrets.COCOS_CREATOR_EXE || vars.COCOS_CREATOR_EXE }}
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
@@ -141,16 +141,59 @@ jobs:
       - name: Build Cocos HTML5 and Super HTML
         run: |
           $ErrorActionPreference = "Stop"
+          $buildArgs = $env:COCOS_BUILD_ARGS
+          if ([string]::IsNullOrWhiteSpace($buildArgs)) {
+            $configPath = Join-Path $env:RUNNER_TEMP "cocos-build-config.json"
+            $buildConfig = @{
+              platform = "web-mobile"
+              debug = $false
+              includedModules = @(
+                "2d",
+                "3d",
+                "affine-transform",
+                "animation",
+                "audio",
+                "base",
+                "custom-pipeline",
+                "dragon-bones",
+                "gfx-webgl",
+                "graphics",
+                "intersection-2d",
+                "light-probe",
+                "marionette",
+                "mask",
+                "particle",
+                "particle-2d",
+                "primitive",
+                "profiler",
+                "rich-text",
+                "skeletal-animation",
+                "terrain",
+                "tiled-map",
+                "tween",
+                "ui",
+                "ui-skew",
+                "video",
+                "websocket",
+                "webview"
+              )
+            }
+            $buildConfig |
+              ConvertTo-Json -Depth 10 |
+              Out-File -LiteralPath $configPath -Encoding utf8
+            $buildArgs = "configPath=$configPath"
+          }
+
           $argumentList = @(
             "--project",
             $env:PROJECT_DIR,
             "--build",
-            $env:COCOS_BUILD_ARGS
+            $buildArgs
           )
 
           Write-Host "Starting Cocos Creator build..."
           Write-Host "Project: $env:PROJECT_DIR"
-          Write-Host "Build args: $env:COCOS_BUILD_ARGS"
+          Write-Host "Build args: $buildArgs"
 
           $process = Start-Process `
             -FilePath $env:COCOS_CREATOR_EXE `
