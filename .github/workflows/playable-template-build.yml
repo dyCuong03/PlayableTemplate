@@ -23,7 +23,7 @@ on:
       cocos_build_args:
         description: "Cocos Creator build args"
         required: false
-        default: "platform=web-mobile;debug=false"
+        default: "platform=web-mobile;debug=false;nativeCodeBundleMode=asmjs"
   push:
     branches:
       - main
@@ -52,7 +52,7 @@ jobs:
     env:
       PROJECT_DIR: ${{ github.workspace }}
       SUPER_HTML_DIR: ${{ github.workspace }}\extensions\super-html
-      COCOS_BUILD_ARGS: ${{ inputs.cocos_build_args || 'platform=web-mobile;debug=false' }}
+      COCOS_BUILD_ARGS: ${{ inputs.cocos_build_args || 'platform=web-mobile;debug=false;nativeCodeBundleMode=asmjs' }}
       COCOS_CREATOR_EXE_CONFIG: ${{ secrets.COCOS_CREATOR_EXE || vars.COCOS_CREATOR_EXE }}
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
